@@ -5,3 +5,4 @@ report/*.aux
 report/*.log
 report/*.out
 .superpowers/
+PRD*.md

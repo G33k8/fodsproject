@@ -45,6 +45,7 @@ Log-likelihood and density shape are the primary metrics. Test MSE is shown only
 \begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_baseline.tex}}\caption{Baseline comparison over 5 seeds (mean $\pm$ std).}\end{table}
 \fig{part4_overlays.png}{Reference (black), single Gaussian (blue dashed) and MDN (red).}
 \fig{part4_branch_prob.png}{$P(t>0\mid x)$, reference vs MDN.}
+Branch error is the largest $|P_{\text{MDN}}(t>0\mid x)-P_{\text{ref}}(t>0\mid x)|$ over $x\in[0.5,3.5]$. Over the 5 seeds it is $0.040\pm0.010$, within the target of about $0.05$, but one seed reaches $0.056$ (the others are $0.028$--$0.045$). The worst-case error depends on initialization, so the target holds on average rather than for every run.
 \fig{part4_residuals.png}{Forward residuals $x-t_s^2$ for sampled $t_s$, against $\mathcal N(0,\sigma^2)$.}
 The residuals are compared with $\mathcal N(0,\sigma^2)$ and not with zero: if a sampled $t_s$ is correct, then $x-t_s^2$ should still contain the measurement noise $\epsilon$, so a spread of exactly zero would mean overfitting the noise.
 
