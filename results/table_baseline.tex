@@ -1,10 +1,9 @@
-\begin{tabular}{lrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-Model & Test mean log-lik. & Test MSE \\
+kind & log-lik. & MSE & branch err. & resid. std & rare branch & diverged \\
 \midrule
-Exact reference & 0.184 & 1.296 \\
-MSE network & --- & 1.300 \\
-Single Gaussian & -1.235 & 1.299 \\
-MDN & 0.163 & 1.298 \\
+mse & --- & 1.299 $\pm$ 0.001 & --- & --- & --- & 0/5 \\
+gauss & -1.235 $\pm$ 0.000 & 1.298 $\pm$ 0.001 & 0.023 $\pm$ 0.004 & 2.472 $\pm$ 0.013 & 5/5 & 0/5 \\
+mdn & 0.164 $\pm$ 0.003 & 1.299 $\pm$ 0.003 & 0.040 $\pm$ 0.010 & 0.206 $\pm$ 0.003 & 5/5 & 0/5 \\
 \bottomrule
 \end{tabular}

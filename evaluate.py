@@ -180,6 +180,168 @@ def cmd_figures(fig_dir="figures", res_dir="results"):
     (Path(res_dir) / "table_baseline.tex").write_text(table_baseline(models, s))
 
 
+# ---------------------------------------------------------------- experiments
+import json
+import math
+
+import train as train_mod
+
+SEEDS = [0, 1, 2, 3, 4]
+_D = dict(sigma=0.2, p_neg=0.5, M=3, var_floor=1e-4)
+
+
+def _cfgs(kind="mdn", **vary):
+    return [{"kind": kind, **_D, **{k: v}} for k, vals in vary.items() for v in vals]
+
+
+EXPERIMENTS = {
+    "baseline": [{"kind": k, **_D} for k in ("mse", "gauss", "mdn")],
+    "noise": _cfgs(sigma=[0.05, 0.2, 0.5]),
+    "prior": _cfgs(p_neg=[0.5, 0.2, 0.05]),
+    "components": _cfgs(M=[1, 2, 3, 5]),
+    "floor": _cfgs(var_floor=[0.0, 1e-4, 1e-2]),
+}
+# ponytail: M=1 in "components" is the same model as "gauss" but is kept as its own row.
+
+
+def _f(v):
+    return float(v) if v is not None and math.isfinite(v) else None
+
+
+def run_one(cfg, seed):
+    a = 2.0
+    s = make_splits(a, cfg["sigma"], cfg["p_neg"], seed=0)
+    model, h = train_mod.fit_model(cfg["kind"], s, seed=seed, M=cfg["M"],
+                                   var_floor=cfg["var_floor"], a=a)
+    x, t = s["test"]
+    row = {**cfg, "seed": seed, "best_epoch": h["best_epoch"], "diverged": bool(h["diverged"]),
+           "test_loglik": None, "test_mse": None, "branch_error": None,
+           "residual_std": None, "rare_branch_recovered": None}
+    try:
+        row["test_mse"] = _f(test_mse(model, x, t))
+        if cfg["kind"] != "mse":
+            row["test_loglik"] = _f(mean_loglik(model, x, t))
+            row["branch_error"] = _f(branch_error(model, a, cfg["sigma"], cfg["p_neg"]))
+            row["residual_std"] = _f(forward_residuals(model, x).std())
+            mb = 1 - model_branch_prob(model, np.array([2.0]))[0]
+            rb = 1 - reference.branch_prob(2.0, a, cfg["sigma"], cfg["p_neg"])[0]
+            row["rare_branch_recovered"] = bool(mb > 0.5 * rb)
+    except Exception:  # diverged weights can be NaN
+        if not h["diverged"]:
+            raise
+    return row
+
+
+def _key(r):
+    return json.dumps([{k: r[k] for k in ("kind", "sigma", "p_neg", "M", "var_floor")}, r["seed"]], sort_keys=True)
+
+
+def run_experiments(path=Path("results/experiments.json")):
+    path = Path(path)
+    rows = json.loads(path.read_text()) if path.exists() else []
+    done = {_key(r) for r in rows}
+    for cfgs in EXPERIMENTS.values():
+        for cfg in cfgs:
+            for seed in SEEDS:
+                if _key({**cfg, "seed": seed}) in done:
+                    continue
+                rows.append(run_one(cfg, seed))
+                done.add(_key(rows[-1]))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(rows, indent=1))
+    return rows
+
+
+def _ms(vals, fmt="{:.3f}"):
+    v = [x for x in vals if x is not None]
+    if not v:
+        return "---"
+    return (fmt + r" $\pm$ " + fmt).format(np.mean(v), np.std(v))
+
+
+def summarize(rows):
+    var = {"baseline": "kind", "noise": "sigma", "prior": "p_neg", "components": "M", "floor": "var_floor"}
+    out = {}
+    for name, cfgs in EXPERIMENTS.items():
+        lines = ["\\begin{tabular}{lrrrrrr}", "\\toprule",
+                 f"{var[name].replace('_', ' ')} & log-lik. & MSE & branch err. & resid. std & rare branch & diverged \\\\", "\\midrule"]
+        for cfg in cfgs:
+            rs = [r for r in rows if all(r[k] == cfg[k] for k in cfg) and r["seed"] in SEEDS]
+            rare = [r["rare_branch_recovered"] for r in rs if r.get("rare_branch_recovered") is not None]
+            lines.append(" & ".join([
+                str(cfg[var[name]]), _ms([r["test_loglik"] for r in rs]), _ms([r["test_mse"] for r in rs]),
+                _ms([r["branch_error"] for r in rs]), _ms([r["residual_std"] for r in rs]),
+                f"{sum(rare)}/{len(rare)}" if rare else "---",
+                f"{sum(r['diverged'] for r in rs)}/{len(rs)}"]) + " \\\\")
+        lines += ["\\bottomrule", "\\end{tabular}", ""]
+        out[name] = "\n".join(lines)
+    return out
+
+
+def _fit(kind, **kw):
+    cfg = {**_D, **kw}
+    s = make_splits(A, cfg["sigma"], cfg["p_neg"], seed=0)
+    m, h = train_mod.fit_model(kind, s, seed=0, M=cfg["M"], var_floor=cfg["var_floor"])
+    return m, h, s
+
+
+def fig_part5(out_dir):
+    g = np.linspace(-0.5, 4.5, 201)
+    t = reference.t_grid()
+    # prior
+    fig, axs = plt.subplots(1, 2, figsize=(9, 3.4))
+    for i, pn in enumerate((0.5, 0.2, 0.05)):
+        m, _, _ = _fit("mdn", p_neg=pn)
+        axs[0].plot(g, reference.branch_prob(g, p_neg=pn), color=f"C{i}", lw=2, label=f"ref, P(t<0)={pn}")
+        axs[0].plot(g, model_branch_prob(m, g), color=f"C{i}", ls="--")
+        axs[1].plot(t, reference.posterior(1.0, p_neg=pn)[1][0], color=f"C{i}", lw=2)
+        axs[1].plot(t, model_density(m, 1.0, t), color=f"C{i}", ls="--")
+    axs[0].set_xlabel("x"); axs[0].set_ylabel("P(t > 0 | x)"); axs[0].legend(fontsize=7)
+    axs[1].set_xlabel("t"); axs[1].set_title("density at x = 1 (solid ref, dashed MDN)")
+    _save(fig, out_dir, "part5_prior.png")
+    # components
+    fig, axs = plt.subplots(1, 2, figsize=(9, 3.4))
+    for ax, x in zip(axs, (1.0, 3.0)):
+        ax.plot(t, reference.posterior(x)[1][0], "k", lw=2, label="reference")
+        for i, M in enumerate((1, 2, 3, 5)):
+            m, _, _ = _fit("mdn", M=M)
+            ax.plot(t, model_density(m, x, t), color=f"C{i}", ls="--", label=f"M={M}")
+        ax.set_title(f"x = {x}"); ax.set_xlabel("t")
+    axs[0].legend(fontsize=7)
+    _save(fig, out_dir, "part5_components.png")
+    # floor
+    fig, axs = plt.subplots(1, 2, figsize=(9, 3.4))
+    axs[1].plot(t, reference.posterior(1.0)[1][0], "k", lw=2, label="reference")
+    for i, fl in enumerate((0.0, 1e-4, 1e-2)):
+        m, h, _ = _fit("mdn", var_floor=fl)
+        axs[0].plot(h["val"], color=f"C{i}", label=f"floor={fl}")
+        if h["diverged"]:
+            axs[0].plot(len(h["val"]), h["val"][-1] if h["val"] and np.isfinite(h["val"][-1]) else 0, "x", color=f"C{i}", ms=10)
+        with np.errstate(all="ignore"):
+            d = model_density(m, 1.0, t)
+        axs[1].plot(t, d, color=f"C{i}", ls="--", label=f"floor={fl}")
+    axs[0].set_xlabel("epoch"); axs[0].set_ylabel("validation NLL"); axs[0].legend(fontsize=7)
+    axs[1].set_xlabel("t"); axs[1].legend(fontsize=7); axs[1].set_title("density at x = 1")
+    _save(fig, out_dir, "part5_floor.png")
+    # noise
+    fig, axs = plt.subplots(1, 3, figsize=(10, 3.2))
+    for ax, sg in zip(axs, (0.05, 0.2, 0.5)):
+        m, _, _ = _fit("mdn", sigma=sg)
+        ax.plot(t, reference.posterior(1.0, sigma=sg)[1][0], "k", lw=2, label="reference")
+        ax.plot(t, model_density(m, 1.0, t), "r--", label="MDN")
+        ax.set_title(rf"$\sigma$ = {sg}, x = 1"); ax.set_xlabel("t")
+    axs[0].legend(fontsize=7)
+    _save(fig, out_dir, "part5_noise.png")
+
+
+def cmd_experiments():
+    rows = run_experiments()
+    Path("results").mkdir(exist_ok=True)
+    for name, tex in summarize(rows).items():
+        Path(f"results/table_{name}.tex").write_text(tex)
+    fig_part5("figures")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["figures", "experiments"])
