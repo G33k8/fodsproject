@@ -39,3 +39,8 @@ def test_mse_net_predicts_near_zero_between_branches(trained):
 def test_model_density_integrates_to_one():
     m = MDN(M=3); t = np.linspace(-6, 6, 4001)
     assert abs(trapezoid(model_density(m, 1.0, t), t) - 1) < 1e-3
+
+def test_fig_reference_writes_file(tmp_path):
+    from evaluate import fig_reference
+    p = fig_reference(tmp_path)
+    assert p.exists() and p.stat().st_size > 10_000
