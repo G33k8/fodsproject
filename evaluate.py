@@ -177,7 +177,7 @@ def cmd_figures(fig_dir="figures", res_dir="results"):
     fig_reference(fig_dir); fig_mse(models, s, fig_dir); fig_overlays(models, fig_dir)
     fig_branch_prob(models, fig_dir); fig_residuals(models, s, SIGMA, fig_dir)
     Path(res_dir).mkdir(exist_ok=True)
-    (Path(res_dir) / "table_baseline.tex").write_text(table_baseline(models, s))
+    (Path(res_dir) / "table_baseline_seed0.tex").write_text(table_baseline(models, s))
 
 
 # ---------------------------------------------------------------- experiments

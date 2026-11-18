@@ -1,0 +1,69 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,graphicx,listings,booktabs}
+\newcommand{\fig}[2]{\begin{figure}[ht]\centering\includegraphics[width=\linewidth]{../figures/#1}\caption{#2}\end{figure}}
+\title{Project 8: Inverse Problems with Multiple Valid Solutions}
+\date{November 21, 2026}
+\author{MAC 312}
+\begin{document}
+\maketitle
+
+\section*{Setup}
+$t\sim\mathrm{Unif}[-a,a]$ with $a=2$, $x=t^2+\epsilon$, $\epsilon\sim\mathcal N(0,\sigma^2)$, $\sigma=0.2$ unless stated. Train/validation/test sizes are 5000/1000/2000, with data seed 0 in every experiment; the seed in the experiment matrix controls only initialization and batch order. All three models share one body, $1\to64\to64$ with $\tanh$, trained with Adam (lr $10^{-3}$, batches of 256, up to 3000 epochs, early stopping on validation loss with patience 200, gradient clipping at 5). The single-Gaussian network is the MDN with $M=1$. Test data is never used for model selection.
+
+\section{Part 1: exact reference}
+\paragraph{Derivation.} With prior $p(t)=1/(2a)$ on $[-a,a]$, Bayes' rule gives
+\[
+p(t\mid x)=\frac{p(x\mid t)p(t)}{\int p(x\mid t')p(t')\,dt'}\propto \exp\!\Big(-\frac{(x-t^2)^2}{2\sigma^2}\Big),\quad |t|\le a .
+\]
+For an asymmetric prior with $P(t<0)=q$ the prior factor is $q/a$ for $t<0$ and $(1-q)/a$ for $t\ge0$. The constant is computed by the trapezoid rule on 2001 grid points (\texttt{scipy.integrate.trapezoid}, the same rule as \texttt{np.trapz}, which is removed in NumPy 2.x). Normalization is done in log space (subtract the per-row maximum before exponentiating), so that $x$ far outside the training range ($x=10$ or $x=-1$) gives a finite density rather than $0/0$.
+
+\paragraph{Regions.}
+\begin{itemize}
+\item $x\le0$: one blob centred at $t=0$ (for $x<0$ the best $t^2$ is $0$, the least-wrong value).
+\item $x$ clearly $>0$: two peaks at $\pm\sqrt{x}$, each of width about $\sigma/(2\sqrt x)$, with equal mass under the symmetric prior. For $x$ near $0$ (e.g.\ $x=0.1$) the two peaks overlap and merge into a flat top, so one versus two peaks is hard to tell.
+\item $x$ near $a^2=4$: the peaks at $\pm\sqrt x$ are pushed against $\pm a$ and truncated by the support.
+\item $x\gg a^2$ (e.g.\ $x=4.5$): all mass piles up at $t=\pm a$; the density has mass at the boundary only, and any learned model is extrapolating beyond the training data.
+\end{itemize}
+\fig{part1_reference.png}{Reference $p(t\mid x)$ for $x\in\{-0.2,0.1,1,3,4.5\}$; dotted lines mark $\pm\sqrt x$.}
+
+\section{Part 2: the MSE network}
+Minimizing $\mathbb E[(t-f(x))^2]$ over functions $f$: for each $x$, $\mathbb E[(t-f)^2\mid x]=\mathrm{Var}(t\mid x)+(f-\mathbb E[t\mid x])^2$, minimized by $f(x)=\mathbb E[t\mid x]$. Under the symmetric prior $p(t\mid x)$ is symmetric about $0$, so $\mathbb E[t\mid x]=0$ for every $x$: the network answers $0$, in the valley between the two branches, where there is no probability.
+\fig{part2_mse.png}{Training data, the MSE network (red) and the reference $\mathbb E[t\mid x]$ (dashed).}
+
+\section{Part 3: the mixture density network}
+The head outputs $3M$ numbers per $x$: logits for $\pi_j$, means $\mu_j$ and raw variances. Weights use softmax, variances use $v_j=\mathrm{softplus}(\text{raw}_j)+10^{-4}$. The loss is the negative log-likelihood,
+\[
+\mathcal L=-\sum_{n}\log\sum_{j=1}^{M}\pi_j(x_n)\mathcal N(t_n\mid\mu_j(x_n),v_j(x_n)),
+\]
+which we divide by $N$ so that its value does not depend on batch size. It is computed as
+$\mathcal L=-\sum_n\operatorname{logsumexp}_j\big[\log\pi_j-\tfrac12\log(2\pi v_j)-\tfrac{(t_n-\mu_j)^2}{2v_j}\big]$ with $\log\pi=\texttt{log\_softmax}(\text{logits})$. Working in log space and using \texttt{logsumexp} means a point far from every component gives a large but finite loss instead of $\log 0=-\infty$; the softplus keeps $v>0$ and the floor stops a component collapsing onto a single point (which would send the loss to $-\infty$). Means are initialized spread over $[-a,a]$ to discourage collapse onto one branch. Derivatives come from PyTorch autograd.
+
+\section{Part 4: comparison}
+Log-likelihood and density shape are the primary metrics. Test MSE is shown only to show that it misleads.
+\begin{table}[ht]\centering\input{../results/table_baseline_seed0.tex}\caption{Seed-0 models on the test set; the exact row uses the quadrature reference.}\end{table}
+\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_baseline.tex}}\caption{Baseline comparison over 5 seeds (mean $\pm$ std).}\end{table}
+\fig{part4_overlays.png}{Reference (black), single Gaussian (blue dashed) and MDN (red).}
+\fig{part4_branch_prob.png}{$P(t>0\mid x)$, reference vs MDN.}
+\fig{part4_residuals.png}{Forward residuals $x-t_s^2$ for sampled $t_s$, against $\mathcal N(0,\sigma^2)$.}
+The residuals are compared with $\mathcal N(0,\sigma^2)$ and not with zero: if a sampled $t_s$ is correct, then $x-t_s^2$ should still contain the measurement noise $\epsilon$, so a spread of exactly zero would mean overfitting the noise.
+
+\section{Part 5: stress tests}
+Each row below is the mean $\pm$ standard deviation over 5 seeds. ``Rare branch'' is the number of runs in which the model gives $P(t<0\mid x=2)$ at least half the reference value; ``diverged'' counts runs that produced a non-finite loss.
+\paragraph{Noise level.}\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_noise.tex}}\end{table}
+\fig{part5_noise.png}{MDN vs reference at $x=1$ for each $\sigma$.}
+\paragraph{Asymmetric prior.}\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_prior.tex}}\end{table}
+\fig{part5_prior.png}{Branch probability and density at $x=1$ for each $P(t<0)$ (solid: reference, dashed: MDN).}
+\paragraph{Number of components.}\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_components.tex}}\end{table}
+\fig{part5_components.png}{Density at $x=1,3$ for each $M$.}
+\paragraph{Variance floor.}\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_floor.tex}}\end{table}
+\fig{part5_floor.png}{Validation NLL and density at $x=1$ for each floor.}
+\paragraph{Initialization.} Every row above already averages over 5 initialization seeds; the $\pm$ values are the initialization spread.
+
+\paragraph{Failures.} The numbers of diverged runs and of runs that lost the rare branch are in the last two columns of the tables above, and are the only counts we claim.
+
+\paragraph{Why MSE cannot assess a multimodal answer.} Squared error scores only the conditional mean $\mathbb E[t\mid x]$. A model with one peak at $0$, a model with two peaks at $\pm\sqrt x$ and the exact posterior all have the same mean, so under the symmetric prior they all get the same test MSE, as the test-MSE column of the first baseline table and the tables above shows, while their log-likelihoods differ greatly. A single number about the mean cannot distinguish a unimodal from a bimodal distribution.
+
+\clearpage
+\input{appendix.tex}
+\end{document}
