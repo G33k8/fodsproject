@@ -47,7 +47,7 @@ def test_fig_reference_writes_file(tmp_path):
 
 def test_experiment_matrix_shape():
     from evaluate import EXPERIMENTS
-    assert {k: len(v) for k, v in EXPERIMENTS.items()} == {"baseline": 3, "noise": 3, "prior": 3, "components": 4, "floor": 3}
+    assert {k: len(v) for k, v in EXPERIMENTS.items()} == {"baseline": 3, "noise": 3, "prior": 3, "components": 4, "floor": 3, "harsh_floor": 3, "harsh_prior": 2}
 
 def test_run_one_survives_divergence(monkeypatch):
     import json

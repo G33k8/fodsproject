@@ -58,6 +58,11 @@ Each row below is the mean $\pm$ standard deviation over 5 seeds. ``Rare branch'
 \fig{part5_components.png}{Density at $x=1,3$ for each $M$.}
 \paragraph{Variance floor.}\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_floor.tex}}\end{table}
 \fig{part5_floor.png}{Validation NLL and density at $x=1$ for each floor.}
+\paragraph{Harsher settings.} The defaults above produced no failures, so we pushed two settings further. First, with $\sigma=0.02$ each peak at $x=1$ has standard deviation about $\sigma/(2\sqrt x)=0.01$, i.e.\ variance about $10^{-4}$, so the floor now binds. A floor of $10^{-2}$ forces components roughly ten times wider than the true peaks: test log-likelihood falls from $2.214$ (floor $0$) to $0.685$ and the forward-residual std is $0.238$ against $\sigma=0.02$, a clear failure, even though branch probability and test MSE are unchanged. A floor of $10^{-4}$ costs a little ($2.170$); floor $0$ still did not diverge in any of the 5 runs, because softplus never returns exactly $0$ and early stopping halts before a component collapses. Second, with only $1\%$ or $2\%$ negative $t$ (about 50 and 100 of 5{,}000 training points), the MDN still kept the rare branch in 5/5 runs, with its height slightly below the reference.
+\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_harsh_floor.tex}}\caption{Variance floor at $\sigma=0.02$.}\end{table}
+\begin{table}[ht]\centering\small\resizebox{\linewidth}{!}{\input{../results/table_harsh_prior.tex}}\caption{Very rare negative branch, $\sigma=0.2$.}\end{table}
+\fig{part5_harsh.png}{Left: density at $x=1$ for each floor at $\sigma=0.02$. Right: density at $x=2$ (log scale) for $P(t<0)\in\{0.02,0.01\}$.}
+
 \paragraph{Initialization.} Every row above already averages over 5 initialization seeds; the $\pm$ values are the initialization spread.
 
 \paragraph{Failures.} The numbers of diverged runs and of runs that lost the rare branch are in the last two columns of the tables above, and are the only counts we claim.

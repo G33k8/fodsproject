@@ -1,11 +1,18 @@
+import argparse
+import json
+import math
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.integrate import trapezoid
 
 import reference
-from models import MDN, MSENet, mdn_log_prob, mdn_mean, mdn_branch_prob, mdn_sample, to_tensor
+import train as train_mod  # module import so tests can monkeypatch train_mod.fit_model
+from data import make_splits
+from models import MSENet, mdn_log_prob, mdn_mean, mdn_branch_prob, mdn_sample, to_tensor
 
 # ---------------------------------------------------------------- metrics
 
@@ -31,10 +38,8 @@ test_mse.__test__ = False  # not a pytest test
 
 @torch.no_grad()
 def model_density(model, x, t):
-    log_pi, mu, var = model(to_tensor([x]))
-    tt = _t(t)[:, None]
-    z = log_pi - 0.5 * (torch.log(2 * np.pi * var) + (tt - mu) ** 2 / var)
-    return torch.logsumexp(z, dim=1).exp().numpy().astype(float)
+    out = [p.expand(len(t), -1) for p in model(to_tensor([x]))]
+    return mdn_log_prob(*out, _t(t)).exp().numpy().astype(float)
 
 
 @torch.no_grad()
@@ -59,13 +64,6 @@ def branch_error(model, a, sigma, p_neg):
     return float(np.abs(model_branch_prob(model, BRANCH_X) - ref).max())
 
 # ---------------------------------------------------------------- figures
-import argparse
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-
-from data import make_splits
-from train import fit_model
 
 FIG_X = [-0.2, 0.1, 1.0, 3.0, 4.5]
 A, SIGMA = 2.0, 0.2
@@ -169,7 +167,7 @@ def table_baseline(models, splits):
 
 def train_baselines(seed=0):
     s = make_splits(seed=0)
-    return {k: fit_model(k, s, seed=seed)[0] for k in ("mse", "gauss", "mdn")}, s
+    return {k: train_mod.fit_model(k, s, seed=seed)[0] for k in ("mse", "gauss", "mdn")}, s
 
 
 def cmd_figures(fig_dir="figures", res_dir="results"):
@@ -181,17 +179,14 @@ def cmd_figures(fig_dir="figures", res_dir="results"):
 
 
 # ---------------------------------------------------------------- experiments
-import json
-import math
-
-import train as train_mod
 
 SEEDS = [0, 1, 2, 3, 4]
 _D = dict(sigma=0.2, p_neg=0.5, M=3, var_floor=1e-4)
+HARSH_SIGMA = 0.02  # peak std ~ sigma/(2 sqrt x) = 0.01 at x=1, i.e. variance ~ the 1e-4 floor
 
 
-def _cfgs(kind="mdn", **vary):
-    return [{"kind": kind, **_D, **{k: v}} for k, vals in vary.items() for v in vals]
+def _cfgs(kind="mdn", base=None, **vary):
+    return [{"kind": kind, **_D, **(base or {}), k: v} for k, vals in vary.items() for v in vals]
 
 
 EXPERIMENTS = {
@@ -200,8 +195,10 @@ EXPERIMENTS = {
     "prior": _cfgs(p_neg=[0.5, 0.2, 0.05]),
     "components": _cfgs(M=[1, 2, 3, 5]),
     "floor": _cfgs(var_floor=[0.0, 1e-4, 1e-2]),
+    # harsher Part 5 settings: narrow peaks make the floor bind; very rare negative branch
+    "harsh_floor": _cfgs(base={"sigma": HARSH_SIGMA}, var_floor=[0.0, 1e-4, 1e-2]),
+    "harsh_prior": _cfgs(p_neg=[0.02, 0.01]),
 }
-# ponytail: M=1 in "components" is the same model as "gauss" but is kept as its own row.
 
 
 def _f(v):
@@ -209,7 +206,7 @@ def _f(v):
 
 
 def run_one(cfg, seed):
-    a = 2.0
+    a = A
     s = make_splits(a, cfg["sigma"], cfg["p_neg"], seed=0)
     model, h = train_mod.fit_model(cfg["kind"], s, seed=seed, M=cfg["M"],
                                    var_floor=cfg["var_floor"], a=a)
@@ -260,7 +257,8 @@ def _ms(vals, fmt="{:.3f}"):
 
 
 def summarize(rows):
-    var = {"baseline": "kind", "noise": "sigma", "prior": "p_neg", "components": "M", "floor": "var_floor"}
+    var = {"baseline": "kind", "noise": "sigma", "prior": "p_neg", "components": "M", "floor": "var_floor",
+           "harsh_floor": "var_floor", "harsh_prior": "p_neg"}
     out = {}
     for name, cfgs in EXPERIMENTS.items():
         lines = ["\\begin{tabular}{lrrrrrr}", "\\toprule",
@@ -332,6 +330,21 @@ def fig_part5(out_dir):
         ax.set_title(rf"$\sigma$ = {sg}, x = 1"); ax.set_xlabel("t")
     axs[0].legend(fontsize=7)
     _save(fig, out_dir, "part5_noise.png")
+    # harsh: floor at sigma=0.02, and very rare negative branch
+    fig, axs = plt.subplots(1, 2, figsize=(9, 3.4))
+    axs[0].plot(t, reference.posterior(1.0, sigma=HARSH_SIGMA)[1][0], "k", lw=2, label="reference")
+    for i, fl in enumerate((0.0, 1e-4, 1e-2)):
+        m, _, _ = _fit("mdn", sigma=HARSH_SIGMA, var_floor=fl)
+        axs[0].plot(t, model_density(m, 1.0, t), color=f"C{i}", ls="--", label=f"floor={fl}")
+    axs[0].set_xlim(-1.2, 1.2); axs[0].set_xlabel("t"); axs[0].legend(fontsize=7)
+    axs[0].set_title(rf"$\sigma$ = {HARSH_SIGMA}, x = 1")
+    for i, pn in enumerate((0.02, 0.01)):
+        m, _, _ = _fit("mdn", p_neg=pn)
+        axs[1].plot(t, reference.posterior(2.0, p_neg=pn)[1][0], color=f"C{i}", lw=2, label=f"ref, P(t<0)={pn}")
+        axs[1].plot(t, model_density(m, 2.0, t), color=f"C{i}", ls="--", label=f"MDN, P(t<0)={pn}")
+    axs[1].set_yscale("log"); axs[1].set_ylim(1e-3, None); axs[1].set_xlabel("t")
+    axs[1].set_title("density at x = 2 (log scale)"); axs[1].legend(fontsize=7)
+    _save(fig, out_dir, "part5_harsh.png")
 
 
 def cmd_experiments():
